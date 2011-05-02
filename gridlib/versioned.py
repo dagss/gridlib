@@ -1,6 +1,6 @@
 from functools import wraps
-from ..func_inspect import filter_args, get_func_code, get_func_name
-from ..hashing import hash
+from joblib.func_inspect import filter_args, get_func_code, get_func_name
+from joblib.hashing import hash
 import hashlib
 import base64
 

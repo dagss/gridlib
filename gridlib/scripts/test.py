@@ -1,6 +1,6 @@
-from joblib.hpc import versioned, LocalSpawnExecutor
-from joblib.hpc.clusters.titan_oslo import TitanOsloExecutor
-from joblib.hpc.test.funcs import func1, funcex, download_url
+from gridlib import versioned, LocalSpawnExecutor
+from gridlib.clusters.titan_oslo import TitanOsloExecutor
+from gridlib.test.funcs import func1, funcex, download_url
 import logging
 logging.basicConfig()
 logger = logging.getLogger()

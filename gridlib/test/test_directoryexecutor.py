@@ -13,7 +13,7 @@ from nose.tools import ok_, eq_, assert_raises
 
 from ..executor import DirectoryExecutor, DirectoryFuture, execute_directory_job
 from .. import versioned
-from ...numpy_pickle import load, dump
+from joblib.numpy_pickle import load, dump
 
 
 # Debug settings

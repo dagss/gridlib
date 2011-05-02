@@ -14,9 +14,9 @@ from concurrent.futures import Executor, TimeoutError
 from textwrap import dedent
 from os.path import join as pjoin
 
-from ..func_inspect import filter_args
-from ..hashing import NumpyHasher
-from .. import numpy_pickle
+from joblib.func_inspect import filter_args
+from joblib.hashing import NumpyHasher
+from joblib import numpy_pickle
 from . import fileref as fileref_module
 
 __all__ = ['ClusterFuture', 'ClusterExecutor', 'DirectoryExecutor', 'DirectoryFuture']
