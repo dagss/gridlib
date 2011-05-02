@@ -244,7 +244,7 @@ class DirectoryFuture(ClusterFuture):
         jobid = self._submit()
         with file(pjoin(self.job_path, 'jobid'), 'w') as f:
             f.write(jobid + '\n')
-        with file(pjoin(self.job_path, 'log'), 'w') as f:
+        with file(pjoin(self.job_path, 'log'), 'a') as f:
             f.write('%s submitted job (%s), waiting to start\n' %
                     (time.strftime('%Y-%m-%d %H:%M:%S'), jobid))
         return jobid

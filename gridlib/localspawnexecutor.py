@@ -31,7 +31,7 @@ class LocalSpawnExecutor(DirectoryExecutor):
             #!/bin/bash
             cd {path}
             echo $$ > pid
-            exec >> log 2>&1 </dev/null
+            exec 2>&1 >> log </dev/null
             echo $(date) Starting job {job_name}
             {python} <<END
             {script}
