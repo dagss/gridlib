@@ -6,6 +6,7 @@ import logging
 import tempfile
 import shutil
 import os
+import sys
 import contextlib
 import functools
 from os.path import join as pjoin
@@ -36,18 +37,17 @@ class MockExecutor(DirectoryExecutor):
     
     def __init__(self, *args, **kw):
         DirectoryExecutor.__init__(self, *args, **kw)
-        self.subexecutor = ProcessPoolExecutor()
+        self.subexecutor = ProcessPoolExecutor(max_workers=1)
         self.given_work_paths = []
         self.submit_count = 0
 
-    def _create_future_from_job_dir(self, job_name):
-        return MockFuture(self, job_name)
+    def _create_future_from_job_dir(self, job_name, is_generator):
+        return MockFuture(self, job_name, is_generator)
 
     def _create_jobscript(self, human_name, job_name, work_path):
         self.given_work_paths.append(work_path)
         with file(pjoin(work_path, 'jobscript'), 'w') as f:
             f.write('jobscript for job %s\n' % human_name)
-
 
 class MockFutureError(Exception):
     pass
@@ -106,6 +106,12 @@ def function_replaced_in_process(sourcename, targetname):
         globals()[targetname] = target
         source.__name__ = source_name
 
+def assert_not_raises(func, *args):
+    try:
+        func(*args)
+    except:
+        assert False, 'Did not expect any exception but got: %r' % sys.exc_info()[1]
+
 #
 # Test context
 #
@@ -157,7 +163,8 @@ def test_basic():
                             before_submit_hook=before_submit)
 
     # Run a single job, check that it executes, and check input/output
-    fut = executor.submit(func, 1, 1)    
+    fut = executor.submit(func, 1, 1)
+    yield eq_, fut.is_generator(), False
     yield eq_, executor.submit_count, 1
     yield eq_, fut.result(), 2
     yield ne_, executor.given_work_paths[0], fut.job_path
@@ -184,6 +191,34 @@ def test_basic():
     yield eq_, len(tests), 3
     for x in tests:
         yield x
+
+
+@versioned(1, deps=False)
+def mygenerator(n, should_raise=False):
+    for i in range(n):
+        yield 2 * i
+    if should_raise:
+        raise MyException('test')
+
+@with_store()
+def test_generator():
+    executor = MockExecutor(store_path=store_path,
+                            logger=logger)
+    fut = executor.submit(mygenerator, 3)
+    yield eq_, fut.is_generator(), True
+    yield eq_, list(fut.incremental_result()), [0, 2, 4]
+    yield eq_, list(fut.result()), [0, 2, 4]
+
+    it = executor.submit(mygenerator, 2, True).incremental_result()
+    yield eq_, it.next(), 0
+    yield eq_, it.next(), 2
+    yield assert_raises, MyException, it.next
+
+    yield assert_not_raises, executor.submit(mygenerator, 2, True).result
+    yield assert_raises, MyException, list, executor.submit(mygenerator, 2, True).result()
+
+    # TODO: Test nonblocking behaviour
+    # TODO: Test caching behaviour
     
 class MyException(Exception):
     pass

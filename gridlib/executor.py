@@ -10,6 +10,7 @@ import shutil
 import tempfile
 import time
 import base64
+import inspect
 from concurrent.futures import Executor, TimeoutError
 from textwrap import dedent
 from os.path import join as pjoin
@@ -113,7 +114,8 @@ class DirectoryExecutor(ClusterExecutor):
         # race for this; if we got to create the directory, we have
         # the lock.
         we_made_it = self._ensure_job_dir(job_name, func, args, kwargs)
-        future = self._create_future_from_job_dir(job_name)
+        is_generator = inspect.isgenerator(func) or inspect.isgeneratorfunction(func)
+        future = self._create_future_from_job_dir(job_name, is_generator)
         if we_made_it:
             self.logger.info('Created job: %s' % job_name)
             if should_submit:
@@ -123,6 +125,9 @@ class DirectoryExecutor(ClusterExecutor):
             self.logger.info('Job already exists: %s' % job_name)
         return future
 
+    def _create_future_from_job_dir(self, job_path, is_generator):
+        return DirectoryFuture(self, job_path, is_generator)
+        
     def _ensure_job_dir(self, job_name, func, args, kwargs):
         """
         Returns
@@ -184,10 +189,14 @@ class DirectoryFuture(ClusterFuture):
     # and ensure that unpickling this object on a different
     # host changes self.path accordingly.
     
-    def __init__(self, executor, job_name):
+    def __init__(self, executor, job_name, is_generator):
         self.job_name = job_name
         self._executor = executor
+        self._is_generator = is_generator
         self.job_path = os.path.realpath(pjoin(self._executor.store_path, job_name))
+
+    def is_generator(self):
+        return self._is_generator
 
     def cancel(self):
         raise NotImplementedError()
@@ -202,16 +211,22 @@ class DirectoryFuture(ClusterFuture):
         return self._finished() or self.cancelled()
     
     def result(self, timeout=None):
-        status, output = self._result(timeout)
+        self._wait(timeout)
+        if self.is_generator():
+            return self.incremental_result()
+        status, output = self._load_output(timeout)
         if status == 'exception':
             raise output
         elif status == 'finished':
             return output
         else:
             assert False
-    
+
     def exception(self, timeout=None):
-        status, output = self._result(timeout)
+        self._wait(timeout)
+        if self.is_generator():
+            return None # generators never raise exceptions directly
+        status, output = self._load_output(timeout)
         if status == 'exception':
             return output
         elif status == 'finished':
@@ -219,26 +234,64 @@ class DirectoryFuture(ClusterFuture):
         else:
             assert False
 
-    def _result(self, timeout=None):
+    def incremental_result(self, timeout=None):
+        """ Like result(), but does not block waiting for generator exhaustion
+
+        If the computing function is not a generator, this behaves
+        exactly like result(). Otherwise, a wrapping iterator
+        is immediately returned. The next() method of the iterator
+        waits ``timeout`` seconds for the next element (``timeout==None``
+        acts like for result()).
+        """
+        if not self.is_generator():
+            return self.result(timeout)
+        def gen():
+            idx = 0
+            n = -1
+            output_filename = pjoin(self.job_path, 'output.pkl')
+            for _ in self._poll_generator(timeout):
+                iter_filename = pjoin(self.job_path, 'output-%d.pkl' % idx)
+                if os.path.exists(iter_filename):
+                    yield numpy_pickle.load(iter_filename)
+                    idx += 1
+                elif n == -1 and os.path.exists(output_filename):
+                    status, n, exc = numpy_pickle.load(output_filename)
+                    assert idx <= n, (idx, n)
+                if idx == n:
+                    if status == 'exhausted':
+                        return
+                    elif status == 'exception':
+                        raise exc
+                    else:
+                        assert False
+        return gen()
+    
+    def _wait(self, timeout=None):
+        target_file = pjoin(self.job_path, 'output.pkl')
+        for _ in self._poll_generator(timeout):
+            if os.path.exists(target_file):
+                return
+
+    def _load_output(self, timeout=None):
+        target_file = pjoin(self.job_path, 'output.pkl')
+        self._executor.logger.debug('Loading job output: %s', self.job_name)
+        return numpy_pickle.load(target_file)
+
+    def _poll_generator(self, timeout=None):
         sleeptime = self._executor.poll_interval
         logger = self._executor.logger
         if timeout is not None:
             sleeptime = min(sleeptime, timeout)
             endtime = time.time() + timeout            
         while True:
-            if self._finished():
-                return self._load_output()
-            logger.debug('Waiting for job (sleeptime=%s): %s', sleeptime, self.job_name)
+            yield
             if timeout is not None and time.time() >= endtime:
                 raise TimeoutError()
+            logger.debug('Waiting for job (sleeptime=%s): %s', sleeptime, self.job_name)
             time.sleep(sleeptime)       
 
     def _finished(self):
         return os.path.exists(pjoin(self.job_path, 'output.pkl'))
-
-    def _load_output(self):
-        self._executor.logger.debug('Loading job output: %s', self.job_name)
-        return numpy_pickle.load(pjoin(self.job_path, 'output.pkl'))
 
     def submit(self):
         jobid = self._submit()
@@ -248,6 +301,20 @@ class DirectoryFuture(ClusterFuture):
             f.write('%s submitted job (%s), waiting to start\n' %
                     (time.strftime('%Y-%m-%d %H:%M:%S'), jobid))
         return jobid
+
+    def _submit(self):
+        return self._executor._submit_dir(self.job_path)
+
+def atomic_pickle(data, path, filename):
+    fd, workfile = tempfile.mkstemp(prefix=filename + '-', dir=path)
+    try:
+        os.close(fd)
+        numpy_pickle.dump(data, workfile)
+        os.rename(workfile, pjoin(path, filename))
+    except:
+        if os.path.exists(workfile):
+            os.unlink(workfile)
+        raise
 
 def execute_directory_job(path):
     input = numpy_pickle.load(pjoin(path, 'input.pkl'))
@@ -262,18 +329,30 @@ def execute_directory_job(path):
                             func.version_info['version']))
     fileref_module.store_path, fileref_module.job_name = (
         os.path.split(os.getcwd()))
-    try:
-        output = ('finished', func(*args, **kwargs))
-    except BaseException:
-        output = ('exception', sys.exc_info()[1])
-    # Do an atomic pickle; if output.pkl is present then it is complete
-    fd, workfile = tempfile.mkstemp(prefix='output.pkl-', dir=path)
-    try:
-        os.close(fd)
-        numpy_pickle.dump(output, workfile)
-        os.rename(workfile, pjoin(path, 'output.pkl'))
-    except:
-        if os.path.exists(workfile):
-            os.unlink(workfile)
-        raise
 
+    is_generator = inspect.isgenerator(func) or inspect.isgeneratorfunction(func)
+    if is_generator:
+        # The generator outputs output-0.pkl, output-1.pkl, and so on.
+        # The final iteration count and the final exception is finally
+        # stored in output.pkl.
+        iter = func(*args, **kwargs)
+        idx = 0
+        while True:
+            try:
+                iter_result = iter.next()
+            except StopIteration:
+                output = ('exhausted', idx, None)
+                break
+            except BaseException:
+                output = ('exception', idx, sys.exc_info()[1])
+                break
+            else:
+                atomic_pickle(iter_result, path, 'output-%d.pkl' % idx)
+                idx+= 1
+    else:
+        try:
+            output = ('finished', func(*args, **kwargs))
+        except BaseException:
+            output = ('exception', sys.exc_info()[1])
+
+    atomic_pickle(output, path, 'output.pkl')

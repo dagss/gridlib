@@ -21,10 +21,13 @@ class SlurmExecutor(DirectoryExecutor):
     post_command = ''
     python_command = 'python'
 
-    def _slurm(self, scriptfile):
+    def _submit_dir(self, job_path):
+        scriptfile = pjoin(self.job_path, 'sbatchscript')
+        jobid = self._slurm(scriptfile)
         cmd = "sbatch '%s'" % scriptfile
         if os.system(cmd) != 0:
             raise RuntimeError('command failed: %s' % cmd)
+        return jobid
     
     def get_launch_command(self, job_name):
         return dedent("""\
@@ -50,15 +53,6 @@ class SlurmExecutor(DirectoryExecutor):
         with file(jobscriptpath, 'w') as f:
             f.write(script)
 
-    def _create_future_from_job_dir(self, job_path):
-        return SlurmFuture(self, job_path)
-        
-class SlurmFuture(DirectoryFuture):
-    def _submit(self):
-        scriptfile = pjoin(self.job_path, 'sbatchscript')
-        jobid = self._executor._slurm(scriptfile)
-        return jobid
-        
 def make_slurm_script(jobname, command, logfile, where=None, ntasks=1, nodes=None,
                       openmp=1, time='24:00:00', constraints=(),
                       queue='astro', precmd='', postcmd='',
