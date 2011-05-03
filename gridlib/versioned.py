@@ -31,7 +31,7 @@ def versioned_call(func, *args, **kwargs):
     
 def versioned(version=None, deps=True, ignore=()):
     passed_func = None
-    if hasattr(version, '__call__'):
+    if callable(version):
         # Used as decorator without ()
         if deps != True or ignore != ():
             raise TypeError('Invalid version argument')
