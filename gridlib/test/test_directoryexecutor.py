@@ -214,8 +214,6 @@ def test_different_versions():
     # to compute a job using the "wrong source".  Guard against this
     # situation (e.g., user did not push source code to cluster, and
     # submitted job from laptop).
-    global func
-
     executor = MockExecutor(store_path=store_path,
                             logger=logger)
 
