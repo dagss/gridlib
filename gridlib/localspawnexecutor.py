@@ -8,7 +8,7 @@ from os.path import join as pjoin
 import socket
 import time
 
-__all__ = ['LocalSpawnExecutor', 'LocalSpawnFuture']
+__all__ = ['LocalSpawnExecutor']
 
 from .executor import DirectoryExecutor, DirectoryFuture
 
@@ -42,15 +42,9 @@ class LocalSpawnExecutor(DirectoryExecutor):
                         script=self.get_launching_python_code(job_name),
                         job_name=job_name))
 
-    def _create_future_from_job_dir(self, job_path):
-        return LocalSpawnFuture(self, job_path)
-
-class LocalSpawnFuture(DirectoryFuture):
-    _pid_re = re.compile(r'\[[0-9]+\] ([0-9]+)')
-
-    def _submit(self):
-        scriptfile = pjoin(self.job_path, 'run.sh')
-        pidfile = pjoin(self.job_path, 'pid')
+    def _submit_dir(self, job_path):
+        scriptfile = pjoin(job_path, 'run.sh')
+        pidfile = pjoin(job_path, 'pid')
         subprocess.check_call('bash %s &' % scriptfile, shell=True)
         while not os.path.exists(pidfile):
             time.sleep(0.001)
