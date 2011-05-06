@@ -16,9 +16,10 @@ from os.path import join as pjoin
 import errno
 
 from joblib.job_store import (DirectoryJobStore, DirectoryJob, print_logger,
-                              ensure_dir)
+                              ensure_dir, COMPUTED, MUST_COMPUTE, WAIT)
 from joblib.hashing import NumpyHasher
 from joblib.func_inspect import get_func_name, get_func_code
+from joblib import numpy_pickle
 
 IDS_DIR_NAME = 'ids'
 JOBS_DIR_NAME = 'jobs'
@@ -48,13 +49,15 @@ class ClusterJobStore(DirectoryJobStore):
         h.hash((func.version_info['digest'], args_dict))
         job_hash = encode_digest(h._hash.digest())
 
-        return DirectoryJob(self, func,
-                            func_path,
-                            func_hash,
-                            job_hash)
+        return ClusterJob(self, func, func_path, func_hash, job_hash)
+
+    def _check_previous_func_code(self, *args, **kw):
+        pass # called by call to super in load_or_lock
 
 class ClusterJobError(Exception):
     pass
+
+def _noop(): pass
 
 class ClusterJob(DirectoryJob):
     def __init__(self, store, func, func_path, func_hash, job_hash):
@@ -72,10 +75,10 @@ class ClusterJob(DirectoryJob):
                                  self.job_hash[:2], self.job_hash[2:])
 
     def persist_input(self, args_tuple, kwargs_dict, filtered_args_dict):
-        DirectoryJob.persist_input(args_tuple, kwargs_dict, filtered_args_dict)
+        DirectoryJob.persist_input(self, args_tuple, kwargs_dict, filtered_args_dict)
         call_info = dict(func=self.func, version_info=self.func.version_info,
                          args=args_tuple, kwargs=kwargs_dict)
-        numpy_pickle.dump(call_info, pjoin(workpath, 'input.pkl'))
+        numpy_pickle.dump(call_info, pjoin(self._work_path, 'input.pkl'))
 
     def clear(self):
         if os.path.exists(self.job_path):
@@ -86,7 +89,8 @@ class ClusterJob(DirectoryJob):
     def load_or_lock(self, blocking=True, pre_load_hook=_noop,
                      post_load_hook=_noop):
         if self.is_computed():
-            status, output = DirectoryJob.load_or_lock(blocking,
+            status, output = DirectoryJob.load_or_lock(self,
+                                                       blocking,
                                                        pre_load_hook,
                                                        post_load_hook)
             if status == MUST_COMPUTE:
@@ -108,6 +112,7 @@ class ClusterJob(DirectoryJob):
                     raise
             else:
                 running = False
+                ensure_dir(os.path.dirname(self._jobid_link))
                 try:
                     os.symlink(self.job_path, self._jobid_link)
                 except OSError, e:
@@ -142,3 +147,4 @@ class ClusterJob(DirectoryJob):
 
     def close(self):
         self.rollback()
+        self.job_path = None
