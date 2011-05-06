@@ -1,12 +1,18 @@
 import os
 from os.path import realpath, join as pjoin
-__all__ = ['fileref']
+__all__ = ['fileref', 'result_path']
 
 # Process parameters
 job_name = None
 store_path = (realpath(os.environ['JOBSTORE'])
               if 'JOBSTORE' in os.environ
               else None)
+
+def result_path():
+    if job_name is None:
+        return os.getcwd()
+    else:
+        return pjoin(store_path, job_name)
 
 def fileref(path):
     if job_name is not None:
